@@ -4,7 +4,7 @@
   "description": "한국형 금융 계산기 MCP 서버 - 4대보험/연봉실수령액/퇴직금/양도소득세/DSR·DTI/환율변환 계산기를 MCP 도구로 제공",
   "main": "index.js",
   "bin": {
-    "mcp-finance-tools": "./index.js"
+    "mcp-finance-tools": "index.js"
   },
   "scripts": {
     "start": "node index.js",
