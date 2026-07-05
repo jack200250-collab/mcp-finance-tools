@@ -19,6 +19,7 @@
       "command": "npx",
       "args": ["-y", "mcp-finance-tools"],
       "env": {
+        "GUMROAD_PRODUCT_PERMALINK": "Gumroad 프리미엄 상품 permalink (선택, 프리미엄 도구 사용 시 필요)",
         "KR_FINANCE_LICENSE_KEY": "발급받은 프리미엄 라이선스 키 (선택)"
       }
     }
@@ -50,15 +51,15 @@ MCP 도구 이름(tool name) 표준은 영문/숫자/`_`/`-`/`.`만 허용합니
 ```json
 { "연봉": 40000000 }
 ```
-→ 월 실수령액 약 2,909,863원, 연 실수령액 약 34,918,356원 (근사치)
+→ 월 실수령액 약 2,878,295원, 연 실수령액 약 34,539,540원 (근사치. 근로소득공제 구간표 + 종합소득세 누진구조 + 근로소득세액공제를 반영한 계산, 1인 가구/표준공제 전제)
 
-#### 프리미엄 도구 (4종 — 라이선스 키 필요, 월 9,900원)
+#### 프리미엄 도구 (4종 — Gumroad 라이선스 실시간 검증 필요, 월 9,900원)
 
 | 도구 이름 (식별자) | 한국어 명칭 | 설명 |
 |---|---|---|
-| `calc_capital_gains_tax_simple` | 양도소득세 간이 계산기 | 부동산 양도차익 + 보유기간 입력 → 간이 세율 구간 기준 양도소득세 근사 계산 |
+| `calc_capital_gains_tax_simple` | 양도소득세 간이 계산기 | 부동산 양도차익 + 보유기간(+보유주택수) 입력 → 간이 세율 구간 기준 양도소득세 근사 계산. 1주택+2년 이상 보유 시 비과세 가능성 경고 표시 |
 | `calc_dsr_dti` | DSR/DTI 계산기 | 연소득 + 기존 대출 상환액 + 신규 대출 조건(원금/금리/만기) 입력 → DSR·DTI 비율 및 대출 한도 계산 |
-| `calc_fx_convert` | 환율 변환 계산기 | 사용자가 제공한 환율값 기준 통화 변환 (실시간 API 연동 없음) |
+| `calc_fx_convert` | 환율 변환 계산기 | 환율을 직접 입력하면 그 값을, 입력하지 않으면 무료 공개 API(open.er-api.com)로 실시간 환율을 조회해 통화 변환 |
 | `calc_housing_subscription_score` | 청약 가점 계산기 | 무주택기간(32점)+부양가족수(35점)+청약통장 가입기간(17점) → 84점 만점 청약 가점 계산 |
 
 **예시 (`calc_dsr_dti`):**
@@ -73,20 +74,24 @@ MCP 도구 이름(tool name) 표준은 영문/숫자/`_`/`-`/`.`만 허용합니
 ```
 → 월 상환액 약 1,432,246원, DSR 약 28.6%, DTI 약 20% (근사치)
 
-### 무료/프리미엄 구분 및 라이선스
+### 무료/프리미엄 구분 및 라이선스 (v1.1.0 — Gumroad 실시간 검증으로 전환)
 
-프리미엄 도구 4종은 실행 전 `process.env.KR_FINANCE_LICENSE_KEY` 환경변수를 검사합니다.
+프리미엄 도구 4종은 실행할 때마다 **Gumroad License Verification API**(`https://api.gumroad.com/v2/licenses/verify`, API 키 불필요한 공개 엔드포인트)를 호출해 라이선스를 실시간으로 검증합니다.
 
-- 키가 없거나 유효하지 않으면: "프리미엄 라이선스가 필요합니다" 안내 메시지와 구매 링크를 반환합니다 (계산을 수행하지 않음).
-- 키는 `KRFIN-XXXX-YYYY-ZZZZ` 형식이며, `ZZZZ`는 앞 두 세그먼트의 **HMAC-SHA256 체크섬**입니다(`calculators.js`의 `generateLicenseKey()`로 생성). 형식만 맞고 체크섬이 틀린 임의 문자열(예: `KRFIN-AB12-CD34-EF56`)은 거부됩니다.
+- `GUMROAD_PRODUCT_PERMALINK` 환경변수(서버 운영자가 설정)가 없으면 → "프리미엄 상품 준비 중" 메시지로 안전하게 차단합니다(fail-closed).
+- `KR_FINANCE_LICENSE_KEY` 환경변수(구매자가 설정)가 없으면 → 네트워크 호출 없이 즉시 "구매 필요" 메시지를 반환합니다.
+- 두 값이 모두 있으면 Gumroad 서버에 실제로 결제·발급 여부를 조회합니다. 환불(refunded)/이의제기(chargebacked·disputed)/구독취소(subscription_cancelled_at) 상태인 키는 거부됩니다.
+- **네트워크 호출이 실패하거나 타임아웃되어도 라이선스를 통과시키지 않습니다** (fail-closed 원칙 — 장애를 "우회 성공"으로 오인하지 않도록 설계).
 
-**중요 — 이 라이선스 검증은 결제 백엔드 없이 동작하는 시뮬레이션입니다.** 체크섬 덕분에 "아무 문자열이나 통과"하는 문제는 해결했지만, 발급 대장이 없어 환불/구독 취소된 키를 개별 차단할 수는 없습니다. **실제 서비스로 운영하려면 Gumroad(또는 다른 결제 시스템)와 연동해 결제 완료 시 고유 라이선스 키를 발급하고, 서버 측에서 발급/취소 대장을 조회해 검증하는 구조로 교체해야 합니다.** 상세 설계는 `monetization-plan.md` §8 참고.
+**v1.0.0에서 바뀐 이유**: v1.0.0은 로컬 HMAC-SHA256 체크섬으로 자체 검증하는 방식이었는데, 이 코드 전체가 npm/GitHub에 그대로 공개되어 있어 검증 로직과 비밀키가 함께 노출되었습니다. 즉 소스를 읽을 수 있는 사람은 누구나 유효한 "프리미엄 키"를 스스로 만들어낼 수 있는 근본적 결함이었습니다. v1.1.0은 검증 판단 자체를 로컬 코드가 아니라 Gumroad 서버로 옮겨, 실제로 결제하고 Gumroad가 발급한 키만 통과하도록 바꿨습니다 — 소스코드를 전부 공개해도 위조가 불가능합니다.
 
-### 주의사항 (정확성)
+### 주의사항 (정확성, v1.1.0 개선)
 
-- 모든 계산은 **2026년 기준 근사치/근사 공식**이며, 국민연금공단·국민건강보험공단·국세청의 공식 고시 수치를 그대로 반영한 것이 아닙니다.
-- 연봉 실수령액의 소득세는 실제 국세청 "근로소득 간이세액표"가 아니라 급여 구간별 근사 실효세율을 사용합니다.
-- 양도소득세는 1세대1주택 비과세, 다주택자 중과, 조정대상지역 여부를 반영하지 않은 매우 단순화된 모델입니다.
+- 모든 계산은 **2026년 7월 고시 기준 요율/구간**을 반영했으나, 세무/재무 자문을 대체하지 않는 근사 계산입니다.
+- **4대보험**: 국민연금 기준소득월액 상한(6,590,000원)/하한(410,000원)을 반영했습니다(2026.7~2027.6 고시 기준). 2026년 확정 요율(국민연금 근로자부담 4.75%, 건강보험 3.595%, 장기요양 13.14%)을 사용합니다.
+- **연봉 실수령액**: 근로소득공제 구간표 + 종합소득세 누진구조 + 근로소득세액공제(한도 포함)를 반영한 근사 공식을 사용합니다. **전제: 1인 가구, 본인 기본공제+표준세액공제(13만원)만 적용** — 부양가족 추가공제, 신용카드 소득공제, 보험료·의료비·교육비 등 특별세액공제는 반영하지 않았습니다. 여전히 실제 국세청 "근로소득 간이세액표"·연말정산 결과와 차이가 있을 수 있습니다.
+- **양도소득세**: `보유주택수`(기본값 1) 입력을 지원합니다. 1주택+보유기간 2년 이상이면 1세대1주택 비과세 대상일 가능성이 높다는 경고를 표시하지만, 실거주 요건·조정대상지역 여부 등은 자동 판정할 수 없어 과세를 가정한 참고용 계산도 함께 제공합니다. 다주택자 중과·조정대상지역 여부는 미반영.
+- **환율변환**: 환율을 직접 입력하면 그 값을 우선 사용하고(오프라인 폴백), 입력하지 않으면 무료 공개 API(open.er-api.com)로 실시간 환율을 조회합니다.
 - **이 서버는 세무/재무 자문을 대체하지 않습니다.** 실제 의사결정 전 반드시 세무사, 회계사, 금융기관 등 전문가와 상담하십시오.
 
 ---
@@ -103,29 +108,42 @@ MCP 도구 이름(tool name) 표준은 영문/숫자/`_`/`-`/`.`만 허용합니
     "kr-finance-tools": {
       "command": "npx",
       "args": ["-y", "mcp-finance-tools"],
-      "env": { "KR_FINANCE_LICENSE_KEY": "your premium key (optional)" }
+      "env": {
+        "GUMROAD_PRODUCT_PERMALINK": "your Gumroad product permalink (set by operator)",
+        "KR_FINANCE_LICENSE_KEY": "your premium key (optional)"
+      }
     }
   }
 }
 ```
 
-Local dev: `npm install && node index.js` (stdio transport).
+Local dev: `npm install && node index.js` (stdio transport). Requires Node.js >= 18 (uses global `fetch`).
 
 ### Tools
 
 **Free (3):** `calc_4major_insurance`, `calc_annual_salary_net`, `calc_severance_pay` — run without any license.
 
-**Premium (4, requires `KR_FINANCE_LICENSE_KEY`):** `calc_capital_gains_tax_simple`, `calc_dsr_dti`, `calc_fx_convert`, `calc_housing_subscription_score`.
+**Premium (4, requires a Gumroad-verified `KR_FINANCE_LICENSE_KEY`):** `calc_capital_gains_tax_simple` (now accepts `보유주택수`/house-count for a one-house non-taxable warning), `calc_dsr_dti`, `calc_fx_convert` (now supports live rate lookup via open.er-api.com when no rate is supplied), `calc_housing_subscription_score`.
 
-All calculators are pure, deterministic formulas — no external API calls, no network dependency (FX conversion uses a user-supplied rate, not a live feed).
+### License gating (v1.1.0 — real-time Gumroad server verification, fail-closed)
 
-### License gating (self-verifying checksum, no payment backend yet)
+v1.0.0 verified licenses with a local HMAC-SHA256 checksum baked into the same source code that ships on npm/GitHub — meaning anyone reading the code could generate their own "valid" key. v1.1.0 replaces this with a runtime call to the **Gumroad License Verification API** (`POST https://api.gumroad.com/v2/licenses/verify`, no API key required): only keys actually issued by Gumroad for a real purchase pass, because verification happens on Gumroad's server, not in the shipped code.
 
-Premium tools check `process.env.KR_FINANCE_LICENSE_KEY` against the format `KRFIN-XXXX-YYYY-ZZZZ`, where `ZZZZ` is an HMAC-SHA256 checksum of the first two segments (see `generateLicenseKey()` in `calculators.js`). Arbitrary strings that merely match the shape are rejected. This closes the "any string passes" gap from v1, but there is still no issuance ledger to revoke refunded keys. **Before shipping to production, wire this up to a real payment processor (Gumroad, etc.)** that issues a unique key per paid subscription and — ideally — lets the server check revocation status remotely. See `monetization-plan.md` §8 for the full design.
+- No `GUMROAD_PRODUCT_PERMALINK` set → blocked with a "premium product not yet configured" message (fail-closed).
+- No `KR_FINANCE_LICENSE_KEY` set → blocked immediately, no network call.
+- Network failure/timeout while calling Gumroad → **blocked, never passed through** (fail-closed — a network hiccup must never look like a successful check).
+- Gumroad reports the purchase as refunded/chargebacked/disputed/subscription-cancelled → blocked.
 
-### Accuracy disclaimer
+### Accuracy disclaimer (v1.1.0 improvements)
 
-All figures are **2026 approximations** using simplified formulas, not official withholding tables from Korean tax/insurance authorities. This tool does not replace professional tax or financial advice — consult a licensed tax accountant (세무사) or financial advisor before making real decisions.
+All figures use **July 2026 published rates/brackets** but remain simplified approximations, not a substitute for professional advice.
+
+- **4 major insurance**: national pension now respects the 기준소득월액 cap (6,590,000 KRW) / floor (410,000 KRW) for the 2026.7–2027.6 period, and uses the confirmed 2026 rates (pension 4.75%, health 3.595%, long-term care 13.14% of health premium).
+- **Take-home pay**: now models the actual 근로소득공제 bracket table, progressive income-tax brackets, and 근로소득세액공제 (with its cap) instead of an arbitrary flat-rate approximation. **Assumes a single-person household with only the basic personal deduction + standard tax credit** — dependent deductions, credit-card deductions, and itemized special tax credits are not modeled.
+- **Capital gains tax**: accepts an optional `보유주택수` (house count, default 1). If house count ≤ 1 and holding period ≥ 2 years, it now surfaces a "likely eligible for one-house non-taxable treatment — confirm with a tax accountant" warning alongside a reference taxable-scenario calculation (full automatic exemption determination is not possible).
+- **FX conversion**: if you supply a rate, it's used as-is (offline fallback); if you omit it, a free no-key API (open.er-api.com) is queried for a live rate.
+
+This tool does not replace professional tax or financial advice — consult a licensed tax accountant (세무사) or financial advisor before making real decisions.
 
 ---
 
@@ -133,9 +151,9 @@ All figures are **2026 approximations** using simplified formulas, not official 
 
 - `package.json` — npm 패키지 정의 (`bin` 엔트리 포함, `npx`로 실행 가능)
 - `index.js` — MCP 서버 메인 파일 (stdio transport, 7개 tool 등록)
-- `calculators.js` — 계산 로직 순수 함수 모음 + 라이선스 키 생성/검증 로직 (MCP 프로토콜과 무관, 단독 테스트 가능)
-- `test-calculators.js` — 7개 계산기 + 라이선스 체크섬 검증을 MCP 프로토콜 없이 직접 호출하는 스모크 테스트
-- `monetization-plan.md` — 수익화 전략 + 라이선스 발급 자동화 설계 문서
+- `calculators.js` — 계산 로직 순수 함수 모음 + Gumroad 실시간 라이선스 검증 로직 (MCP 프로토콜과 무관, 단독 테스트 가능)
+- `test-calculators.js` — 7개 계산기 + Gumroad 라이선스 게이트(목 fetch로 검증)를 MCP 프로토콜 없이 직접 호출하는 스모크 테스트
+- `monetization-plan.md` — 수익화 전략 + 라이선스 검증 설계 문서 (v1.1.0: Gumroad 실시간 검증으로 갱신)
 - `marketplace-metadata.md` — Smithery/Glama/MCP.so 등록용 메타데이터 정리
 - `DEPLOY_STEPS.md` — GitHub push / npm publish / 마켓플레이스 등록 실행 명령어 안내 (사용자 직접 실행용)
 - `.gitignore` — `node_modules` 등 커밋 제외 목록

@@ -11,15 +11,18 @@
  *                  calc_severance_pay(퇴직금)
  * 프리미엄 도구(4~7): calc_capital_gains_tax_simple(양도소득세 간이), calc_dsr_dti(DSR/DTI),
  *                  calc_fx_convert(환율변환), calc_housing_subscription_score(청약 가점)
- *   -> process.env.KR_FINANCE_LICENSE_KEY 유효성 검증(HMAC 체크섬) 후에만 동작합니다.
+ *   -> 매 호출 시 Gumroad License Verification API로 실시간 검증(process.env
+ *      GUMROAD_PRODUCT_PERMALINK + KR_FINANCE_LICENSE_KEY 필요) 후에만 동작합니다.
  *
  * 참고: MCP 도구 이름(tool name)은 표준상 A-Z, a-z, 0-9, _, -, . 만 허용되어
  * (한글 등 비ASCII 문자를 쓰면 일부 MCP 클라이언트/마켓플레이스와 호환성
  * 문제가 발생할 수 있음) 도구 식별자는 영문으로 짓고, 한국어 이름은
  * title/description에 명시했습니다.
  *
- * 외부 API 키 없이 순수 계산 로직으로만 동작합니다 (환율은 사용자가
- * 직접 입력한 값을 사용).
+ * 외부 네트워크 호출: (1) 환율변환 도구는 사용자가 환율을 입력하지 않으면
+ * 무료 공개 API(open.er-api.com)로 실시간 환율을 조회합니다. (2) 프리미엄
+ * 도구 4종은 매 호출 시 Gumroad License Verification API로 라이선스를
+ * 검증합니다(위조 방지를 위해 로컬 시크릿 검증 방식을 사용하지 않음).
  * -----------------------------------------------------------------------
  */
 
@@ -31,7 +34,7 @@ const calc = require("./calculators.js");
 
 const server = new McpServer({
   name: "mcp-finance-tools",
-  version: "1.0.0",
+  version: "1.1.0",
   title: "한국형 금융 계산기 MCP 서버",
 });
 
@@ -46,29 +49,26 @@ function textResult(payload) {
   };
 }
 
-function premiumGateResult() {
-  return {
-    content: [{ type: "text", text: calc.PREMIUM_PURCHASE_MESSAGE }],
-  };
-}
-
 // 프리미엄 게이트 실패를 알리기 위한 마커 에러 (핸들러보다 먼저 선언)
+// requirePremiumLicense()가 반환하는 상황별 메시지(준비 중/구매 필요/
+// 네트워크 오류/환불됨 등)를 그대로 담아 사용자에게 보여준다.
 class PremiumRequired extends Error {
-  constructor() {
-    super(calc.PREMIUM_PURCHASE_MESSAGE);
+  constructor(message) {
+    super(message || calc.PREMIUM_PURCHASE_MESSAGE);
     this.name = "PremiumRequired";
+    this.premiumMessage = message || calc.PREMIUM_PURCHASE_MESSAGE;
   }
 }
 
 function handleErrors(fn) {
   return async (args) => {
     try {
-      const result = fn(args);
+      const result = await fn(args);
       return textResult(result);
     } catch (err) {
       if (err instanceof PremiumRequired) {
         // 프리미엄 게이트: 정상적인 안내 응답으로 처리 (isError 아님)
-        return premiumGateResult();
+        return { content: [{ type: "text", text: err.premiumMessage }] };
       }
       return {
         content: [{ type: "text", text: `계산 오류: ${err.message}` }],
@@ -153,16 +153,23 @@ server.registerTool(
     title: "양도소득세 간이 계산기 (프리미엄)",
     description:
       "[프리미엄/양도소득세 간이] 부동산 양도차익과 보유기간을 입력하면 간이 " +
-      "세율 구간으로 양도소득세를 근사 계산합니다. 실제 세무 자문이 아닙니다. " +
-      "KR_FINANCE_LICENSE_KEY 환경변수의 유효한 라이선스 키가 필요합니다.",
+      "세율 구간으로 양도소득세를 근사 계산합니다. 보유주택수(기본값 1)를 함께 " +
+      "입력하면 1세대1주택 비과세 가능성 경고도 표시합니다. 실제 세무 자문이 아닙니다. " +
+      "Gumroad 라이선스 실시간 검증(KR_FINANCE_LICENSE_KEY)이 필요합니다.",
     inputSchema: {
       양도차익: z.number().positive().describe("양도가액 - 취득가액 - 필요경비 (원)"),
       보유기간_년: z.number().nonnegative().describe("보유기간 (년, 예: 2.5)"),
+      보유주택수: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe("양도 시점 기준 보유주택수 (기본값 1). 1주택+2년 이상 보유 시 비과세 가능성 경고 표시"),
     },
   },
-  handleErrors((args) => {
-    const gate = calc.requirePremiumLicense();
-    if (!gate.ok) throw new PremiumRequired();
+  handleErrors(async (args) => {
+    const gate = await calc.requirePremiumLicense();
+    if (!gate.ok) throw new PremiumRequired(gate.message);
     return calc.calc양도소득세_간이(args);
   })
 );
@@ -177,7 +184,7 @@ server.registerTool(
     description:
       "[프리미엄/DSR·DTI] 연소득, 기존 대출 상환액, 신규 대출 조건(원금/금리/만기)을 " +
       "입력하면 DSR·DTI 비율과 대출 한도를 계산합니다. " +
-      "KR_FINANCE_LICENSE_KEY 환경변수의 유효한 라이선스 키가 필요합니다.",
+      "Gumroad 라이선스 실시간 검증(KR_FINANCE_LICENSE_KEY)이 필요합니다.",
     inputSchema: {
       연소득: z.number().positive().describe("연소득 (원)"),
       기존대출_연간원리금상환액: z
@@ -195,9 +202,9 @@ server.registerTool(
       신규대출_만기년: z.number().positive().describe("신규 대출 만기 (년)"),
     },
   },
-  handleErrors((args) => {
-    const gate = calc.requirePremiumLicense();
-    if (!gate.ok) throw new PremiumRequired();
+  handleErrors(async (args) => {
+    const gate = await calc.requirePremiumLicense();
+    if (!gate.ok) throw new PremiumRequired(gate.message);
     return calc.calcDSR_DTI(args);
   })
 );
@@ -210,19 +217,25 @@ server.registerTool(
   {
     title: "환율 변환 계산기 (프리미엄)",
     description:
-      "[프리미엄/환율변환] 사용자가 제공한 환율값 기준으로 통화를 변환합니다. " +
-      "실시간 환율 API 연동은 없습니다. " +
-      "KR_FINANCE_LICENSE_KEY 환경변수의 유효한 라이선스 키가 필요합니다.",
+      "[프리미엄/환율변환] 환율을 직접 입력하면 그 값으로, 입력하지 않으면 무료 공개 API " +
+      "(open.er-api.com)로 실시간 환율을 조회해 통화를 변환합니다. " +
+      "Gumroad 라이선스 실시간 검증(KR_FINANCE_LICENSE_KEY)이 필요합니다.",
     inputSchema: {
       금액: z.number().nonnegative().describe("변환할 금액"),
       기준통화: z.string().min(1).describe("기준 통화 코드 (예: USD)"),
       대상통화: z.string().min(1).describe("대상 통화 코드 (예: KRW)"),
-      환율: z.number().positive().describe("1 기준통화 = 환율 × 1 대상통화"),
+      환율: z
+        .number()
+        .positive()
+        .optional()
+        .describe(
+          "1 기준통화 = 환율 × 1 대상통화. 생략하면 open.er-api.com에서 실시간 환율을 조회합니다."
+        ),
     },
   },
-  handleErrors((args) => {
-    const gate = calc.requirePremiumLicense();
-    if (!gate.ok) throw new PremiumRequired();
+  handleErrors(async (args) => {
+    const gate = await calc.requirePremiumLicense();
+    if (!gate.ok) throw new PremiumRequired(gate.message);
     return calc.calc환율변환(args);
   })
 );
@@ -238,7 +251,7 @@ server.registerTool(
       "[프리미엄/청약가점] 무주택기간, 부양가족수, 청약통장 가입기간을 입력하면 " +
       "주택청약 가점제 표준 산정표(무주택기간 32점+부양가족 35점+청약통장 17점, " +
       "84점 만점)로 청약 가점을 계산합니다. " +
-      "KR_FINANCE_LICENSE_KEY 환경변수의 유효한 라이선스 키가 필요합니다.",
+      "Gumroad 라이선스 실시간 검증(KR_FINANCE_LICENSE_KEY)이 필요합니다.",
     inputSchema: {
       무주택기간_년: z.number().nonnegative().describe("무주택기간 (년, 예: 5.5)"),
       부양가족수: z
@@ -252,9 +265,9 @@ server.registerTool(
         .describe("청약통장(주택청약종합저축 등) 가입기간 (년, 예: 10)"),
     },
   },
-  handleErrors((args) => {
-    const gate = calc.requirePremiumLicense();
-    if (!gate.ok) throw new PremiumRequired();
+  handleErrors(async (args) => {
+    const gate = await calc.requirePremiumLicense();
+    if (!gate.ok) throw new PremiumRequired(gate.message);
     return calc.calc청약가점(args);
   })
 );

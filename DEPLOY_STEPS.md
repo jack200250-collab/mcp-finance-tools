@@ -93,15 +93,17 @@ npm publish
 
 ---
 
-## 4. Gumroad 프리미엄 라이선스 상품 개설 (선택, 수익화 핵심)
+## 4. Gumroad 프리미엄 라이선스 상품 개설 (필수 — v1.1.0부터 라이선스 검증이 Gumroad API 실시간 조회 방식으로 바뀜)
+
+**중요 (2026-07-05 갱신)**: v1.1.0부터 `calculators.js`의 라이선스 검증은 자체 HMAC 체크섬이 아니라 **Gumroad License Verification API를 실시간으로 호출**하는 방식이다. 즉 아래 순서로 Gumroad 상품을 실제로 만들고 `GUMROAD_PRODUCT_PERMALINK` 환경변수를 설정해야만 프리미엄 도구가 동작한다. 이 설정을 하지 않으면 프리미엄 도구는 "준비 중" 메시지로 안전하게 막혀 있다(위조 우회 불가).
 
 1. https://gumroad.com 가입/로그인.
 2. 새 상품 생성 → 유형: "Digital product" 또는 "Subscription"(월 9,900원 구독 원하면 Membership 상품으로).
-3. 상품 설정에서 **"Generate a unique license key per sale"** 옵션 활성화 (Gumroad가 자동으로 라이선스 키를 만들어 구매 확인 이메일에 포함시켜줌 — 별도 백엔드 코드 불필요).
+3. 상품 설정에서 **"Generate a unique license key per sale"** 옵션을 반드시 활성화 (Gumroad가 결제 완료 시 자동으로 라이선스 키를 만들어 구매 확인 이메일에 포함시켜줌 — 별도 백엔드 코드 불필요, 이 키가 그대로 `KR_FINANCE_LICENSE_KEY`가 된다).
 4. 상품 설명에 `monetization-plan.md` §2(타겟 고객), §4(가격 구조) 내용을 참고해 판매 페이지 문구 작성.
-5. 다만 현재 MCP 서버의 라이선스 검증(`calculators.js`)은 Gumroad가 발급하는 키 형식과 다른 **자체 HMAC 체크섬 형식**(`KRFIN-XXXX-YYYY-ZZZZ`)을 사용한다. 두 가지 중 택1:
-   - **(A) 간단한 방법**: Gumroad 라이선스 키 발급은 끄고, 대신 `generateLicenseKey()`로 직접 키를 만들어 구매자에게 수동으로(또는 Zapier 자동화로) 이메일 전달. 초기 구매자가 적을 때 적합.
-   - **(B) 정식 방법**: `monetization-plan.md` §8-2 Option A/B 설계대로 별도 검증 로직 또는 서버리스 함수 구축 — 규모가 커지면 필요.
+5. 상품 생성 후 URL의 permalink 부분(예: `https://your-store.gumroad.com/l/kr-finance-mcp-premium`의 `kr-finance-mcp-premium`)을 확인한다.
+6. 이 permalink를 MCP 서버를 실행하는 환경(Claude Desktop/Cursor의 MCP 설정 `env` 블록 또는 서버 호스팅 환경변수)의 `GUMROAD_PRODUCT_PERMALINK`에 설정한다.
+7. 구매자에게는 Gumroad가 발급한 키를 그대로 `KR_FINANCE_LICENSE_KEY`에 설정하도록 안내하면 된다 — 별도 발급 로직이나 이메일 자동화가 필요 없다(Gumroad 기본 기능만으로 충분).
 
 ---
 
@@ -114,4 +116,5 @@ npm publish
 - [ ] Smithery 가입 + 등록
 - [ ] Glama 가입 + 등록
 - [ ] MCP.so 가입 + 등록
-- [ ] Gumroad 상품 개설 (라이선스 키 발급 방식 A/B 중 택1)
+- [ ] Gumroad 상품 개설 ("Generate a unique license key per sale" 옵션 활성화)
+- [ ] Gumroad 상품 permalink를 `GUMROAD_PRODUCT_PERMALINK` 환경변수로 설정 (이게 있어야 프리미엄 도구가 "준비 중" 상태에서 벗어남)
