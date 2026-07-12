@@ -2,4 +2,9 @@ node_modules/
 npm-debug.log*
 *.tgz
 .env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets.json
 .DS_Store
